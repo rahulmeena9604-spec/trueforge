@@ -67,9 +67,40 @@ const ModelProviderAuthSchema = z
   .describe('Provider authentication credentials.')
   .openapi('ModelProviderAuth');
 
+const NonSecretProviderHeadersSchema = z
+  .record(z.string().min(1), z.string().min(1))
+  .superRefine((headers, ctx) => {
+    const credentialHeaderNames = new Set([
+      'authorization',
+      'cookie',
+      'proxy-authorization',
+      'set-cookie',
+      'x-api-key',
+      'x-auth-token',
+      'x-access-token',
+    ]);
+
+    for (const headerName of Object.keys(headers)) {
+      if (credentialHeaderNames.has(headerName.toLowerCase())) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `Credential-bearing header "${headerName}" is not allowed; use auth.api_key instead`,
+          path: [headerName],
+        });
+      }
+    }
+  })
+  .describe('Optional non-secret HTTP headers sent to the model provider.');
+
 const ModelProviderManifestBaseSchema = z
   .object({
     auth: ModelProviderAuthSchema,
+    /**
+     * Optional non-secret headers for OpenAI-compatible gateways. API keys stay
+     * in `auth`; these headers are for provider routing, tracing, or protocol
+     * fingerprints such as `User-Agent`.
+     */
+    headers: NonSecretProviderHeadersSchema.optional(),
     models: z.array(ModelEntrySchema).min(1).describe('Models exposed by this provider (at least one).'),
   })
   .strict();
