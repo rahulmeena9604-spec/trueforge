@@ -197,6 +197,7 @@ const ModelSettings = () => {
         type: provider.type,
         name: provider.name,
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+        ...(provider.client === undefined ? {} : { client: provider.client }),
         apiKey: '',
         models,
       });
@@ -212,6 +213,7 @@ const ModelSettings = () => {
           name: draft.name,
           baseUrl: draft.baseUrl,
           apiKey: draft.apiKey,
+          ...(draft.client === undefined ? {} : { client: draft.client }),
           models: draft.models,
         });
       },
@@ -235,6 +237,7 @@ const ModelSettings = () => {
           name: provider.name,
           baseUrl: draft.baseUrl,
           apiKey: draft.apiKey,
+          ...(draft.client === undefined ? {} : { client: draft.client }),
           models: draft.models,
         });
       },
@@ -252,6 +255,7 @@ const ModelSettings = () => {
     ? {
         name: customProviderToEdit.name,
         baseUrl: customProviderToEdit.baseUrl ?? '',
+        ...(customProviderToEdit.client === undefined ? {} : { client: customProviderToEdit.client }),
         models: customProviderToEdit.models,
       }
     : undefined;
