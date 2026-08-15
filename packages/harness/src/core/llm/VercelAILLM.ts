@@ -122,24 +122,64 @@ function isFunctionToolCall<T extends { type: string }>(toolCall: T): toolCall i
   return toolCall.type === 'function';
 }
 
-function clientProfileHeaders(client: VercelAIClientProfile | undefined): Record<string, string> {
+/**
+ * AgentRouter exposes two different APIs. Cline's OpenAI-compatible profile uses Chat Completions,
+ * while Claude Code uses Anthropic Messages. The SDK adapter must therefore use the matching wire
+ * profile; a User-Agent alone is not enough to change the request protocol.
+ */
+function clientProfileHeaders(
+  client: VercelAIClientProfile | undefined,
+  protocol: 'openai-compatible' | 'anthropic',
+): Record<string, string> {
+  const runtimeOs = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'MacOS' : 'Linux';
+
   switch (client) {
     case 'cline':
+      if (protocol !== 'openai-compatible') return {};
       return {
-        // Cline's OpenAI-compatible path uses the OpenAI JS wire profile plus these gateway
-        // identification headers. Provider-configured headers are merged after this profile.
-        'User-Agent': 'OpenAI/JS 4.96.0',
-        'HTTP-Referer': 'https://github.com/cline/cline',
-        'X-Title': 'Cline',
+        // These are the headers emitted by Cline's OpenAI JS client. They are intentionally
+        // non-secret; authentication remains the provider's Bearer API key.
+        // AgentRouter's Cline route recognizes this client profile. The remaining
+        // x-stainless headers preserve the OpenAI JS request shape Cline sends.
+        'User-Agent': 'Cline/3.0.0',
+        'x-stainless-lang': 'js',
+        'x-stainless-package-version': '4.96.0',
+        'x-stainless-os': runtimeOs,
+        'x-stainless-arch': process.arch,
+        'x-stainless-runtime': 'node',
+        'x-stainless-runtime-version': process.version,
+        'x-stainless-retry-count': '0',
+        'x-stainless-timeout': '600',
       };
     case 'claude-code':
+      if (protocol !== 'anthropic') return {};
       return {
+        // Claude Code's Anthropic SDK wire profile. The Anthropic adapter adds
+        // Authorization: Bearer, anthropic-version, and the Messages endpoint.
         'User-Agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+        'x-stainless-lang': 'js',
+        'x-stainless-package-version': '0.74.0',
+        'x-stainless-os': runtimeOs,
+        'x-stainless-arch': process.arch,
+        'x-stainless-runtime': 'node',
+        'x-stainless-runtime-version': process.version,
+        'x-stainless-retry-count': '0',
+        'x-stainless-timeout': '3000',
+        'anthropic-beta': 'claude-code-20250219',
         'x-app': 'cli',
       };
     default:
       return {};
   }
+}
+
+/**
+ * `custom` is the user-configurable provider type. Selecting Claude Code on it is the explicit
+ * escape hatch for an Anthropic-compatible custom endpoint (for example AgentRouter); it must be
+ * treated as Anthropic throughout request conversion, options, and reasoning replay.
+ */
+function wireProviderType(config: VercelAIProviderConfig): VercelAIProviderName {
+  return config.provider.type === 'custom' && config.client === 'claude-code' ? 'anthropic' : config.provider.type;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +197,7 @@ function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
   if (baseUrl === undefined) {
     throw new Error(`Provider "${provider.type}" requires a baseUrl`);
   }
-  const requestHeaders = { ...clientProfileHeaders(client), ...headers };
+  const requestHeaders = { ...clientProfileHeaders(client, 'openai-compatible'), ...headers };
   const compatibleClient = createOpenAICompatible({
     name: provider.type,
     baseURL: baseUrl,
@@ -173,10 +213,17 @@ function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
 
 export function buildLanguageModel(config: VercelAIProviderConfig): LanguageModel {
   const { provider, model, baseUrl, apiKey, headers, client } = config;
-  const requestHeaders = { ...clientProfileHeaders(client), ...headers };
+  if (provider.type === 'custom' && client === 'claude-code' && baseUrl?.replace(/\/+$/, '').endsWith('/v1')) {
+    throw new Error(
+      'Claude Code uses the Anthropic Messages API. Remove /v1 from the custom base URL (for AgentRouter use https://co.agentrouter.org).',
+    );
+  }
+  const protocol = wireProviderType(config) === 'anthropic' ? 'anthropic' : 'openai-compatible';
+  const providerType = wireProviderType(config);
+  const requestHeaders = { ...clientProfileHeaders(client, protocol), ...headers };
   const extraHeaders = Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined;
 
-  switch (provider.type) {
+  switch (providerType) {
     case 'openai': {
       const client = createOpenAI({
         apiKey,
@@ -187,7 +234,10 @@ export function buildLanguageModel(config: VercelAIProviderConfig): LanguageMode
     }
     case 'anthropic': {
       const client = createAnthropic({
-        apiKey,
+        // AgentRouter documents Claude Code authentication as an Anthropic auth token. The AI SDK
+        // `authToken` option produces Authorization: Bearer, matching Claude Code; `apiKey` would
+        // produce x-api-key instead.
+        ...(config.client === 'claude-code' ? { authToken: apiKey } : { apiKey }),
         ...(baseUrl !== undefined ? { baseURL: baseUrl } : {}),
         ...(extraHeaders !== undefined ? { headers: extraHeaders } : {}),
       });
@@ -228,7 +278,7 @@ export function buildLanguageModel(config: VercelAIProviderConfig): LanguageMode
       return compatibleModel(config);
     }
     default: {
-      const _exhaustive: never = provider.type;
+      const _exhaustive: never = providerType;
       throw new Error(`Unknown provider "${String(_exhaustive)}"`);
     }
   }
@@ -556,26 +606,27 @@ export function buildProviderOptions({
   rawBody: unknown;
 }): ProviderOptions {
   const strictJsonSchema = structuredOutputSpec.mode === 'json_schema' ? structuredOutputSpec.strict : undefined;
-  if (config.provider.type === 'openai') {
+  const providerType = wireProviderType(config);
+  if (providerType === 'openai') {
     return { openai: openaiProviderOptions({ rawBody, strictJsonSchema, reasoningEffort }) };
-  } else if (config.provider.type === 'anthropic') {
+  } else if (providerType === 'anthropic') {
     const anthropic = anthropicProviderOptions(rawBody);
     return anthropic !== undefined ? { anthropic } : {};
-  } else if (config.provider.type === 'google-gemini') {
+  } else if (providerType === 'google-gemini') {
     const google = googleGeminiProviderOptions({ rawBody, reasoningRequested: reasoningEffort !== undefined });
     return google !== undefined ? { google } : {};
-  } else if (config.provider.type === 'moonshot') {
+  } else if (providerType === 'moonshot') {
     // The package names its options key after itself, not after the provider.
     const moonshotai = moonshotProviderOptions({ rawBody, reasoningEffort });
     return moonshotai !== undefined ? { moonshotai } : {};
-  } else if (config.provider.type === 'alibaba') {
+  } else if (providerType === 'alibaba') {
     const alibaba = alibabaProviderOptions(rawBody);
     return alibaba !== undefined ? { alibaba } : {};
   } else {
     // The remaining providers all share the compatible adapter, which reads its options from a key
     // matching the `name` it was built with — the provider type itself.
     const compatible = compatibleProviderOptions({ strictJsonSchema, reasoningEffort, rawBody });
-    return compatible !== undefined ? { [config.provider.type]: compatible } : {};
+    return compatible !== undefined ? { [providerType]: compatible } : {};
   }
 }
 
@@ -1396,10 +1447,11 @@ export class VercelAILLM implements ILLM {
     const { providerConfig } = this.config;
     const languageModel = buildLanguageModel(providerConfig);
     const { provider, model } = providerConfig;
+    const providerType = wireProviderType(providerConfig);
 
     const { instructions, messages } = convertMessages({
       messages: body.messages,
-      provider: provider.type,
+      provider: providerType,
       providerName: provider.name,
       logger: this.logger,
     });
@@ -1482,7 +1534,7 @@ export class VercelAILLM implements ILLM {
 
     try {
       const result = yield* mapStreamToChunks({ stream: streamResult.stream, chunkMeta });
-      result.output.source = `${provider.type}/${provider.name}/${model.name}`;
+      result.output.source = `${providerType}/${provider.name}/${model.name}`;
       return result;
     } catch (error) {
       if (this.signal?.aborted) {
