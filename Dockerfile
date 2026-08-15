@@ -26,8 +26,7 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 FROM build-base AS store
 COPY pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm fetch
-
+RUN pnpm fetch
 # ---------------------------------------------------------------------------
 # workspace: install inputs shared by every stage below — the manifests plus the
 # sources the root postinstall hook (build:gen) inlines.
@@ -46,8 +45,7 @@ COPY packages/harness/src/core/sandbox/scripts packages/harness/src/core/sandbox
 # builder: install all deps (incl. dev) and build trueforge-core + server.
 # ---------------------------------------------------------------------------
 FROM workspace AS builder
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile --offline --filter @truefoundry/trueforge...
+RUN pnpm install --frozen-lockfile --offline --filter frontend...
 COPY packages/harness packages/harness
 COPY packages/server packages/server
 RUN pnpm --filter @truefoundry/trueforge-core build && pnpm --filter @truefoundry/trueforge build
@@ -56,8 +54,7 @@ RUN pnpm --filter @truefoundry/trueforge-core build && pnpm --filter @truefoundr
 # frontend-builder: build the UI the server serves (parallel to builder above).
 # ---------------------------------------------------------------------------
 FROM workspace AS frontend-builder
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile --offline --filter frontend...
+RUN pnpm install --frozen-lockfile --offline --filter frontend...
 COPY packages/sdk packages/sdk
 RUN pnpm --filter @truefoundry/trueforge-sdk build
 COPY packages/trueforge-ui-sdk packages/trueforge-ui-sdk
@@ -69,8 +66,7 @@ RUN pnpm --filter frontend build
 # prod-deps: production dependency tree (no dev tooling), resolved offline.
 # ---------------------------------------------------------------------------
 FROM workspace AS prod-deps
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile --offline --prod --filter @truefoundry/trueforge...
+RUN pnpm install --frozen-lockfile --offline --prod --filter @truefoundry/trueforge...
 
 # ---------------------------------------------------------------------------
 # runner: minimal image with prod node_modules + built artifacts.
