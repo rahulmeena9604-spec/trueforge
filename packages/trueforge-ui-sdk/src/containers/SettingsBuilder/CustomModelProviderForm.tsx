@@ -6,11 +6,13 @@ import { cn } from '../../atoms/lib/cn.js';
 import { Button } from '../../atoms/primitives/Button.js';
 import { CenteredModal } from '../../atoms/primitives/CenteredModal.js';
 import { Icon } from '../../icons/Icon.js';
+import type { ModelProviderClientProfile } from '../../server/types.js';
 
 export type CustomProviderDraft = {
   name: string;
   baseUrl: string;
   apiKey: string;
+  client?: ModelProviderClientProfile;
   models: Array<{
     id: string;
     name: string;
@@ -128,6 +130,7 @@ const CustomModelProviderForm = ({
   const [name, setName] = useState(initialValues?.name ?? '');
   const [baseUrl, setBaseUrl] = useState(initialValues?.baseUrl ?? '');
   const [apiKey, setApiKey] = useState('');
+  const [client, setClient] = useState<ModelProviderClientProfile | ''>(initialValues?.client ?? '');
   const [models, setModels] = useState<ModelRow[]>(() => createModelRows(initialValues));
   const [nameTouched, setNameTouched] = useState(false);
   const [baseUrlTouched, setBaseUrlTouched] = useState(false);
@@ -136,6 +139,7 @@ const CustomModelProviderForm = ({
     setName(initialValues?.name ?? '');
     setBaseUrl(initialValues?.baseUrl ?? '');
     setApiKey('');
+    setClient(initialValues?.client ?? '');
     setModels(createModelRows(initialValues));
     setNameTouched(false);
     setBaseUrlTouched(false);
@@ -227,6 +231,7 @@ const CustomModelProviderForm = ({
         name: trimmedName,
         baseUrl: trimmedBaseUrl,
         apiKey: apiKey.trim(),
+        ...(client === '' ? {} : { client }),
         models: models.map(model => {
           const properties: NonNullable<CustomProviderDraft['models'][number]['properties']> = {};
           if (model.reasoningEfforts?.length) properties.reasoningEfforts = model.reasoningEfforts;
@@ -334,6 +339,26 @@ const CustomModelProviderForm = ({
               {isEditMode
                 ? 'Leave blank to keep the saved key, or enter a new key to replace it.'
                 : 'Leave blank if your endpoint needs no key (e.g. a local model).'}
+            </FieldHelp>
+          </div>
+
+          <div>
+            <label htmlFor="custom-provider-client" className="mb-1.5 block text-sm font-medium text-text-primary">
+              Client profile
+              <span className="font-normal text-text-secondary"> (optional)</span>
+            </label>
+            <select
+              id="custom-provider-client"
+              value={client}
+              onChange={event => setClient(event.target.value as ModelProviderClientProfile | '')}
+              className={inputClassName}
+            >
+              <option value="">Default OpenAI-compatible request</option>
+              <option value="cline">Cline</option>
+              <option value="claude-code">Claude Code</option>
+            </select>
+            <FieldHelp>
+              Adds the selected client&apos;s request headers for gateways that require a known coding-client profile.
             </FieldHelp>
           </div>
 
