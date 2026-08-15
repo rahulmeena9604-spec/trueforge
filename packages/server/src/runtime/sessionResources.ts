@@ -87,6 +87,7 @@ export async function getModelDetails({
       // Custom providers may omit auth; adapters still require a string.
       apiKey: provider.manifest.auth?.api_key ?? '',
       headers: provider.manifest.headers ?? {},
+      ...(provider.manifest.client !== undefined ? { client: provider.manifest.client } : {}),
     },
     defaultModelParams: model.properties.max_output_tokens ? { max_tokens: model.properties.max_output_tokens } : {},
   };
