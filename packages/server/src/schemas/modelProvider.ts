@@ -3,7 +3,11 @@
  * and OpenAPI request/response shapes. Catalog file schemas live on ModelCatalog.
  */
 import { z } from '@hono/zod-openapi';
-import { SUPPORTED_REASONING_EFFORTS, VERCEL_AI_PROVIDER_NAMES } from '@truefoundry/trueforge-core/core';
+import {
+  SUPPORTED_REASONING_EFFORTS,
+  VERCEL_AI_CLIENT_PROFILES,
+  VERCEL_AI_PROVIDER_NAMES,
+} from '@truefoundry/trueforge-core/core';
 import { NameSchema, uniqueNames, type ResourceName } from './common';
 
 /** Every type the harness has an adapter for; a test asserts each one has a schema below. */
@@ -14,6 +18,11 @@ export type ModelProviderType = z.infer<typeof ModelProviderTypeSchema>;
 export const ReasoningEffortSchema = z.enum(SUPPORTED_REASONING_EFFORTS).openapi('ReasoningEffort');
 
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+
+export const ModelProviderClientSchema = z
+  .enum(VERCEL_AI_CLIENT_PROFILES)
+  .optional()
+  .describe('Optional request-wire profile for a compatible coding client such as Cline or Claude Code.');
 
 export const ModelPropertiesSchema = z
   .object({
@@ -95,6 +104,7 @@ const NonSecretProviderHeadersSchema = z
 const ModelProviderManifestBaseSchema = z
   .object({
     auth: ModelProviderAuthSchema,
+    client: ModelProviderClientSchema,
     /**
      * Optional non-secret headers for OpenAI-compatible gateways. API keys stay
      * in `auth`; these headers are for provider routing, tracing, or protocol
