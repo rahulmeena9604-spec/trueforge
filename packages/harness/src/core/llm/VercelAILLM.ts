@@ -8,7 +8,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import type { OpenAICompatibleProviderOptions } from '@ai-sdk/openai-compatible';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { JSONObject } from '@ai-sdk/provider';
-import type { ProviderOptions, ReasoningPart } from '@ai-sdk/provider-utils';
+import type { FetchFunction, ProviderOptions, ReasoningPart } from '@ai-sdk/provider-utils';
 import type {
   AssistantContent,
   CallWarning,
@@ -182,6 +182,23 @@ function wireProviderType(config: VercelAIProviderConfig): VercelAIProviderName 
   return config.provider.type === 'custom' && config.client === 'claude-code' ? 'anthropic' : config.provider.type;
 }
 
+/** AgentRouter's Cline-compatible route is served from the legacy host. */
+export function resolveCompatibleBaseUrl(baseUrl: string, client: VercelAIClientProfile | undefined): string {
+  const normalized = baseUrl.replace(/\/+$/, '');
+  return client === 'cline' && normalized === 'https://co.agentrouter.org/v1' ? 'https://agentrouter.org/v1' : baseUrl;
+}
+
+/**
+ * The OpenAI-compatible SDK appends its own product suffix to User-Agent. AgentRouter's Cline
+ * route expects the Cline client identity itself, so overwrite that header at the final fetch
+ * boundary while preserving every other SDK-generated header.
+ */
+const clineFetch: FetchFunction = async (input, init) => {
+  const requestHeaders = new Headers(init?.headers);
+  requestHeaders.set('User-Agent', 'Cline/3.0.0');
+  return fetch(input, { ...init, headers: requestHeaders });
+};
+
 // ---------------------------------------------------------------------------
 // Model construction
 // ---------------------------------------------------------------------------
@@ -200,12 +217,13 @@ function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
   const requestHeaders = { ...clientProfileHeaders(client, 'openai-compatible'), ...headers };
   const compatibleClient = createOpenAICompatible({
     name: provider.type,
-    baseURL: baseUrl,
+    baseURL: resolveCompatibleBaseUrl(baseUrl, client),
     apiKey,
     // Without this the adapter silently downgrades json_schema to a schema-less json_object.
     supportsStructuredOutputs: true,
     // These endpoints omit token counts from streamed responses unless asked.
     includeUsage: true,
+    ...(client === 'cline' ? { fetch: clineFetch } : {}),
     ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
   });
   return compatibleClient(model.id);
@@ -215,7 +233,7 @@ export function buildLanguageModel(config: VercelAIProviderConfig): LanguageMode
   const { provider, model, baseUrl, apiKey, headers, client } = config;
   if (provider.type === 'custom' && client === 'claude-code' && baseUrl?.replace(/\/+$/, '').endsWith('/v1')) {
     throw new Error(
-      'Claude Code uses the Anthropic Messages API. Remove /v1 from the custom base URL (for AgentRouter use https://co.agentrouter.org).',
+      'Claude Code uses the Anthropic Messages API. Remove /v1 from the custom base URL (for AgentRouter use https://agentrouter.org).',
     );
   }
   const protocol = wireProviderType(config) === 'anthropic' ? 'anthropic' : 'openai-compatible';
