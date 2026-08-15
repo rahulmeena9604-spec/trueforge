@@ -78,6 +78,9 @@ export async function getModelDetails({
   // Provider types are adapter names, so this assignment is what keeps them so: a type with no
   // `buildLanguageModel` case fails to compile here.
   const { type, base_url } = provider.manifest;
+  // Keep compatibility with older generated provider declarations that do not
+  // include the optional client profile yet.
+  const configuredClient = 'client' in provider.manifest ? provider.manifest.client : undefined;
   return {
     providerConfig: {
       provider: { type, name: provider.name },
@@ -87,7 +90,7 @@ export async function getModelDetails({
       // Custom providers may omit auth; adapters still require a string.
       apiKey: provider.manifest.auth?.api_key ?? '',
       headers: provider.manifest.headers ?? {},
-      ...(provider.manifest.client !== undefined ? { client: provider.manifest.client } : {}),
+      ...(configuredClient !== undefined ? { client: configuredClient } : {}),
     },
     defaultModelParams: model.properties.max_output_tokens ? { max_tokens: model.properties.max_output_tokens } : {},
   };
