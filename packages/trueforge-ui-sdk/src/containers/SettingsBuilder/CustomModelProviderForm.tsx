@@ -334,8 +334,10 @@ const CustomModelProviderForm = ({
               onBlur={() => setBaseUrlTouched(true)}
               placeholder={
                 client === "claude-code"
-                  ? "https://co.agentrouter.org"
-                  : "http://localhost:11434/v1"
+                  ? "https://agentrouter.org"
+                  : client === "cline"
+                    ? "https://agentrouter.org/v1"
+                    : "http://localhost:11434/v1"
               }
               autoFocus={isEditMode}
               aria-invalid={showBaseUrlError ? true : undefined}
@@ -344,7 +346,11 @@ const CustomModelProviderForm = ({
             {showBaseUrlError ? (
               <FieldError>{baseUrlError}</FieldError>
             ) : !trimmedBaseUrl ? (
-              <FieldHelp>OpenAI-compatible endpoint, usually ending in /v1.</FieldHelp>
+              <FieldHelp>
+                {client === "claude-code"
+                  ? "Anthropic Messages endpoint; do not add /v1."
+                  : "OpenAI-compatible endpoint, usually ending in /v1."}
+              </FieldHelp>
             ) : null}
           </div>
 
