@@ -179,7 +179,30 @@ function clientProfileHeaders(
  * treated as Anthropic throughout request conversion, options, and reasoning replay.
  */
 function wireProviderType(config: VercelAIProviderConfig): VercelAIProviderName {
-  return config.provider.type === 'custom' && config.client === 'claude-code' ? 'anthropic' : config.provider.type;
+  return config.provider.type === 'custom' && resolveClientProfile(config) === 'claude-code'
+    ? 'anthropic'
+    : config.provider.type;
+}
+
+/**
+ * Older saved provider records do not have `client`. Keep those records working when their
+ * endpoint is the AgentRouter OpenAI-compatible endpoint: AgentRouter authorizes that route using
+ * the Cline request profile. New records still win because an explicit profile is always honored.
+ */
+function resolveClientProfile(config: VercelAIProviderConfig): VercelAIClientProfile | undefined {
+  if (config.client !== undefined) return config.client;
+  if (config.provider.type !== 'custom' || config.baseUrl === undefined) return undefined;
+
+  try {
+    const url = new URL(config.baseUrl);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.replace(/\/+$/, '');
+    if ((host === 'agentrouter.org' || host === 'co.agentrouter.org') && path === '/v1') return 'cline';
+  } catch {
+    // The schema validates URLs before they reach the runtime. Leave malformed legacy data to the
+    // normal provider error instead of making profile inference throw a second error.
+  }
+  return undefined;
 }
 
 /** AgentRouter's Cline-compatible route is served from the legacy host. */
@@ -210,7 +233,8 @@ const clineFetch: FetchFunction = async (input, init) => {
  * TODO: move Z AI to @ai-sdk/zai once https://github.com/vercel/ai/pull/17340 ships.
  */
 function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
-  const { provider, model, apiKey, headers, baseUrl, client } = config;
+  const { provider, model, apiKey, headers, baseUrl } = config;
+  const client = resolveClientProfile(config);
   if (baseUrl === undefined) {
     throw new Error(`Provider "${provider.type}" requires a baseUrl`);
   }
@@ -230,15 +254,16 @@ function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
 }
 
 export function buildLanguageModel(config: VercelAIProviderConfig): LanguageModel {
-  const { provider, model, baseUrl, apiKey, headers, client } = config;
-  if (provider.type === 'custom' && client === 'claude-code' && baseUrl?.replace(/\/+$/, '').endsWith('/v1')) {
+  const { provider, model, baseUrl, apiKey, headers } = config;
+  const clientProfile = resolveClientProfile(config);
+  if (provider.type === 'custom' && clientProfile === 'claude-code' && baseUrl?.replace(/\/+$/, '').endsWith('/v1')) {
     throw new Error(
       'Claude Code uses the Anthropic Messages API. Remove /v1 from the custom base URL (for AgentRouter use https://agentrouter.org).',
     );
   }
   const protocol = wireProviderType(config) === 'anthropic' ? 'anthropic' : 'openai-compatible';
   const providerType = wireProviderType(config);
-  const requestHeaders = { ...clientProfileHeaders(client, protocol), ...headers };
+  const requestHeaders = { ...clientProfileHeaders(clientProfile, protocol), ...headers };
   const extraHeaders = Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined;
 
   switch (providerType) {
@@ -255,7 +280,7 @@ export function buildLanguageModel(config: VercelAIProviderConfig): LanguageMode
         // AgentRouter documents Claude Code authentication as an Anthropic auth token. The AI SDK
         // `authToken` option produces Authorization: Bearer, matching Claude Code; `apiKey` would
         // produce x-api-key instead.
-        ...(config.client === 'claude-code' ? { authToken: apiKey } : { apiKey }),
+        ...(clientProfile === 'claude-code' ? { authToken: apiKey } : { apiKey }),
         ...(baseUrl !== undefined ? { baseURL: baseUrl } : {}),
         ...(extraHeaders !== undefined ? { headers: extraHeaders } : {}),
       });
