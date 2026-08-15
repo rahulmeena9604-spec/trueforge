@@ -67,6 +67,11 @@ export const VERCEL_AI_PROVIDER_NAMES = [
 
 export type VercelAIProviderName = (typeof VERCEL_AI_PROVIDER_NAMES)[number];
 
+/** Compatibility profiles for gateways that route or authorize known coding clients. */
+export const VERCEL_AI_CLIENT_PROFILES = ['cline', 'claude-code'] as const;
+
+export type VercelAIClientProfile = (typeof VERCEL_AI_CLIENT_PROFILES)[number];
+
 /**
  * Adapter-facing config, camelCase throughout. Callers translate from the snake_case wire and
  * storage shapes, which stay as they are because they are the published contract.
@@ -88,6 +93,8 @@ export interface VercelAIProviderConfig {
   baseUrl?: string | undefined;
   apiKey: string;
   headers: Record<string, string>;
+  /** Optional wire profile for gateways that require a known coding-client request shape. */
+  client?: VercelAIClientProfile | undefined;
 }
 
 export interface VercelAILLMConfig {
@@ -115,6 +122,26 @@ function isFunctionToolCall<T extends { type: string }>(toolCall: T): toolCall i
   return toolCall.type === 'function';
 }
 
+function clientProfileHeaders(client: VercelAIClientProfile | undefined): Record<string, string> {
+  switch (client) {
+    case 'cline':
+      return {
+        // Cline's OpenAI-compatible path uses the OpenAI JS wire profile plus these gateway
+        // identification headers. Provider-configured headers are merged after this profile.
+        'User-Agent': 'OpenAI/JS 4.96.0',
+        'HTTP-Referer': 'https://github.com/cline/cline',
+        'X-Title': 'Cline',
+      };
+    case 'claude-code':
+      return {
+        'User-Agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+        'x-app': 'cli',
+      };
+    default:
+      return {};
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Model construction
 // ---------------------------------------------------------------------------
@@ -126,11 +153,12 @@ function isFunctionToolCall<T extends { type: string }>(toolCall: T): toolCall i
  * TODO: move Z AI to @ai-sdk/zai once https://github.com/vercel/ai/pull/17340 ships.
  */
 function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
-  const { provider, model, apiKey, headers, baseUrl } = config;
+  const { provider, model, apiKey, headers, baseUrl, client } = config;
   if (baseUrl === undefined) {
     throw new Error(`Provider "${provider.type}" requires a baseUrl`);
   }
-  const client = createOpenAICompatible({
+  const requestHeaders = { ...clientProfileHeaders(client), ...headers };
+  const compatibleClient = createOpenAICompatible({
     name: provider.type,
     baseURL: baseUrl,
     apiKey,
@@ -138,14 +166,15 @@ function compatibleModel(config: VercelAIProviderConfig): LanguageModel {
     supportsStructuredOutputs: true,
     // These endpoints omit token counts from streamed responses unless asked.
     includeUsage: true,
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
   });
-  return client(model.id);
+  return compatibleClient(model.id);
 }
 
 export function buildLanguageModel(config: VercelAIProviderConfig): LanguageModel {
-  const { provider, model, baseUrl, apiKey, headers } = config;
-  const extraHeaders = Object.keys(headers).length > 0 ? headers : undefined;
+  const { provider, model, baseUrl, apiKey, headers, client } = config;
+  const requestHeaders = { ...clientProfileHeaders(client), ...headers };
+  const extraHeaders = Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined;
 
   switch (provider.type) {
     case 'openai': {
